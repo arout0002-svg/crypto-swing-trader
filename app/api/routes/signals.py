@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from app.api.routes import logs as api_logs
 from app.core.database import get_db
 from app.models.db_models import Signal
 from app.scheduler.job_runner import trigger_now
@@ -79,6 +80,17 @@ def signal_stats():
 @router.post("/scan")
 def manual_scan():
     """Manually trigger one scan pipeline run (for testing)."""
+    import time
     logger.info("Manual scan triggered via API")
+    t0 = time.time()
     result = trigger_now()
+    dur = int((time.time() - t0) * 1000)
+    api_logs.push(
+        endpoint="/api/v1/signals/scan",
+        method="POST",
+        payload={"trigger": "manual"},
+        response=result,
+        status=result.get("status", "SUCCESS"),
+        duration_ms=dur,
+    )
     return {"status": "ok", "result": result}

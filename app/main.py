@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import backtest, dashboard, signals, trades
+from app.api.routes import backtest, dashboard, logs as api_logs_route, signals, trades
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.scheduler import job_runner
@@ -103,10 +103,11 @@ app.add_middleware(
 )
 
 # Register API routers
-app.include_router(signals.router,   prefix="/api/v1")
-app.include_router(trades.router,    prefix="/api/v1")
-app.include_router(backtest.router,  prefix="/api/v1")
-app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(signals.router,         prefix="/api/v1")
+app.include_router(trades.router,          prefix="/api/v1")
+app.include_router(backtest.router,        prefix="/api/v1")
+app.include_router(dashboard.router,       prefix="/api/v1")
+app.include_router(api_logs_route.router,  prefix="/api/v1")
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────

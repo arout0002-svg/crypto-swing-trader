@@ -22,6 +22,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.ai.ai_filter import analyze_signal
+from app.api.routes import logs as api_logs
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.db_models import BotRun, Signal
@@ -187,7 +188,17 @@ def run_pipeline() -> dict:
         "alerts_sent": alerts_sent,
         "duration_ms": duration_ms,
         "status": "ERROR" if error_msg else "SUCCESS",
+        "error": error_msg,
     }
+
+    api_logs.push(
+        endpoint="/scheduler/run_pipeline",
+        method="INTERNAL",
+        payload={"symbols": settings.symbol_list, "timeframes": settings.timeframe_list},
+        response=summary,
+        status=summary["status"],
+        duration_ms=duration_ms,
+    )
 
     _broadcast({
         "type": "scan_complete",
