@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Swing Trader — AI Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117; --surface: #161b22; --surface2: #1c2230;
+      --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+      --green: #3fb950; --red: #f85149; --blue: #58a6ff;
+      --yellow: #d29922; --purple: #a5d6ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; }
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+    .badge-buy  { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+    .badge-sell { background: rgba(248,81,73,.15); color: var(--red);   border: 1px solid rgba(248,81,73,.3); }
+    .badge-hold { background: rgba(139,148,158,.15); color: var(--muted); border: 1px solid var(--border); }
+    .badge-win  { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
+    .badge-loss { background: rgba(248,81,73,.15); color: var(--red);   border: 1px solid rgba(248,81,73,.3); }
+
+    .signal-row { border-bottom: 1px solid var(--border); padding: 0.75rem 0; transition: background .15s; }
+    .signal-row:hover { background: var(--surface2); margin: 0 -.75rem; padding-left: .75rem; padding-right: .75rem; border-radius: 6px; }
+    .signal-row:last-child { border-bottom: none; }
+
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 16px; border-radius: 8px; font-size: .875rem; font-weight: 500; cursor: pointer; border: none; transition: opacity .15s; }
+    .btn:hover { opacity: .85; }
+    .btn-primary { background: var(--blue); color: #fff; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-danger { background: rgba(248,81,73,.2); color: var(--red); border: 1px solid rgba(248,81,73,.3); }
+
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    .live-dot.inactive { background: var(--muted); animation: none; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(63,185,80,.4); } 50% { box-shadow: 0 0 0 6px rgba(63,185,80,0); } }
+
+    .confidence-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+    .confidence-fill { height: 100%; border-radius: 2px; transition: width .5s; }
+
+    .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: .875rem; border: 1px solid transparent; border-bottom: none; }
+    .tab.active { background: var(--surface); border-color: var(--border); color: var(--blue); }
+    .tab:not(.active) { color: var(--muted); }
+    .tab:not(.active):hover { color: var(--text); }
+
+    .flash-new { animation: flash .8s ease; }
+    @keyframes flash { 0%,100% { background: transparent; } 50% { background: rgba(63,185,80,.08); } }
+
+    #toast { position: fixed; bottom: 24px; right: 24px; z-index: 999; }
+    .toast-msg { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; margin-top: 8px; font-size: .875rem; animation: slideIn .3s ease; max-width: 360px; }
+    .toast-buy  { border-left: 3px solid var(--green); }
+    .toast-sell { border-left: 3px solid var(--red); }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideOut { from { opacity: 1; } to { opacity: 0; } }
+  </style>
+</head>
+<body>
+
+<!-- Toast notifications -->
+<div id="toast"></div>
+
+<!-- ── Header ── -->
+<header class="border-b border-gray-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50" style="background:var(--bg)">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl">₿</span>
+    <div>
+      <h1 class="font-bold text-lg leading-tight">Crypto Swing Trader</h1>
+      <p class="text-xs" style="color:var(--muted)">AI-Assisted Signals Dashboard</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <div class="flex items-center gap-2 text-sm" style="color:var(--muted)">
+      <div class="live-dot" id="ws-dot"></div>
+      <span id="ws-status">Connecting…</span>
+    </div>
+    <div class="text-xs px-3 py-1 rounded-full" style="background:var(--surface);border:1px solid var(--border);color:var(--muted)">
+      Next scan: <span id="next-run" class="font-mono" style="color:var(--text)">—</span>
+    </div>
+    <button class="btn btn-primary" onclick="triggerScan()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Scan Now
+    </button>
+  </div>
+</header>
+
+<!-- ── Main Content ── -->
+<main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- Stats row -->
+  <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3" id="stats-row">
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Capital</p>
+      <p class="text-xl font-bold" id="stat-capital">₹—</p>
+    </div>
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Total P&L</p>
+      <p class="text-xl font-bold" id="stat-pnl">₹—</p>
+    </div>
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Win Rate</p>
+      <p class="text-xl font-bold" id="stat-winrate">—%</p>
+    </div>
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Open Trades</p>
+      <p class="text-xl font-bold" id="stat-open">—</p>
+    </div>
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Signals (24h)</p>
+      <p class="text-xl font-bold" id="stat-signals">—</p>
+    </div>
+    <div class="stat-card">
+      <p class="text-xs mb-1" style="color:var(--muted)">Last Run</p>
+      <p class="text-sm font-medium" id="stat-lastrun" style="color:var(--muted)">—</p>
+    </div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card">
+      <h3 class="font-semibold mb-4 flex items-center gap-2">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Equity Curve
+      </h3>
+      <canvas id="equityChart" height="160"></canvas>
+    </div>
+    <div class="card">
+      <h3 class="font-semibold mb-4 flex items-center gap-2">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        Signal Distribution (30d)
+      </h3>
+      <canvas id="signalChart" height="160"></canvas>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div>
+    <div class="flex gap-1 mb-0" style="border-bottom:1px solid var(--border);padding-bottom:0">
+      <button class="tab active" onclick="switchTab('signals', this)">Live Signals</button>
+      <button class="tab" onclick="switchTab('trades', this)">Trades</button>
+      <button class="tab" onclick="switchTab('backtest', this)">Backtest</button>
+      <button class="tab" onclick="switchTab('botlogs', this)">Bot Logs</button>
+    </div>
+
+    <!-- Signals tab -->
+    <div id="tab-signals" class="card" style="border-radius:0 12px 12px 12px">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold">Recent Signals</h3>
+        <div class="flex gap-2">
+          <select id="sig-filter-symbol" class="text-sm rounded px-2 py-1" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)" onchange="loadSignals()">
+            <option value="">All Symbols</option>
+            <option>BTC/USDT</option><option>ETH/USDT</option>
+          </select>
+          <select id="sig-filter-type" class="text-sm rounded px-2 py-1" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)" onchange="loadSignals()">
+            <option value="">All Types</option>
+            <option>BUY</option><option>SELL</option><option>HOLD</option>
+          </select>
+        </div>
+      </div>
+      <div id="signals-list"><p class="text-sm" style="color:var(--muted)">Loading…</p></div>
+    </div>
+
+    <!-- Trades tab -->
+    <div id="tab-trades" class="card hidden" style="border-radius:0 12px 12px 12px">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-semibold">Trade Journal</h3>
+        <button class="btn btn-primary text-sm" onclick="document.getElementById('newTradeModal').classList.remove('hidden')">+ Add Trade</button>
+      </div>
+      <div id="trades-list"><p class="text-sm" style="color:var(--muted)">Loading…</p></div>
+      <div class="mt-4 pt-4" style="border-top:1px solid var(--border)">
+        <div id="trade-performance"></div>
+      </div>
+    </div>
+
+    <!-- Backtest tab -->
+    <div id="tab-backtest" class="card hidden" style="border-radius:0 12px 12px 12px">
+      <div class="flex items-center justify-between mb-6">
+        <h3 class="font-semibold">Backtesting Engine</h3>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div>
+          <label class="text-xs mb-1 block" style="color:var(--muted)">Symbol</label>
+          <select id="bt-symbol" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">
+            <option>BTC/USDT</option><option>ETH/USDT</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs mb-1 block" style="color:var(--muted)">Timeframe</label>
+          <select id="bt-timeframe" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">
+            <option>1h</option><option>15m</option><option>4h</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs mb-1 block" style="color:var(--muted)">Candles</label>
+          <input id="bt-candles" type="number" value="300" min="100" max="1000" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">
+        </div>
+      </div>
+      <button class="btn btn-primary mb-6" id="bt-run-btn" onclick="runBacktest()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Run Backtest
+      </button>
+      <div id="backtest-result"></div>
+      <div id="backtest-history" class="mt-6"></div>
+    </div>
+
+    <!-- Bot logs tab -->
+    <div id="tab-botlogs" class="card hidden" style="border-radius:0 12px 12px 12px">
+      <h3 class="font-semibold mb-4">Bot Run History</h3>
+      <div id="bot-runs-list"><p class="text-sm" style="color:var(--muted)">Loading…</p></div>
+    </div>
+  </div>
+</main>
+
+<!-- New Trade Modal -->
+<div id="newTradeModal" class="hidden fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,.7)">
+  <div class="card w-full max-w-md">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="font-semibold">Record New Trade</h3>
+      <button onclick="document.getElementById('newTradeModal').classList.add('hidden')" style="color:var(--muted)">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs mb-1 block" style="color:var(--muted)">Symbol</label>
+          <select id="nt-symbol" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">
+            <option>BTC/USDT</option><option>ETH/USDT</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs mb-1 block" style="color:var(--muted)">Type</label>
+          <select id="nt-type" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)">
+            <option>BUY</option><option>SELL</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2">
+        <div><label class="text-xs mb-1 block" style="color:var(--muted)">Entry</label><input id="nt-entry" type="number" step="any" placeholder="0.00" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)"></div>
+        <div><label class="text-xs mb-1 block" style="color:var(--muted)">Stop Loss</label><input id="nt-sl" type="number" step="any" placeholder="0.00" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)"></div>
+        <div><label class="text-xs mb-1 block" style="color:var(--muted)">Target</label><input id="nt-tp" type="number" step="any" placeholder="0.00" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)"></div>
+      </div>
+      <div><label class="text-xs mb-1 block" style="color:var(--muted)">Position Size (₹)</label><input id="nt-pos" type="number" step="any" placeholder="0.00" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)"></div>
+      <div><label class="text-xs mb-1 block" style="color:var(--muted)">Notes</label><input id="nt-notes" type="text" placeholder="Optional…" class="w-full rounded px-3 py-2 text-sm" style="background:var(--surface2);border:1px solid var(--border);color:var(--text)"></div>
+    </div>
+    <div class="flex gap-3 mt-4">
+      <button class="btn btn-secondary flex-1" onclick="document.getElementById('newTradeModal').classList.add('hidden')">Cancel</button>
+      <button class="btn btn-primary flex-1" onclick="saveTrade()">Save Trade</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/v1';
+let ws = null;
+let equityChart = null, signalChart = null;
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = n => n == null ? '—' : Number(n).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtPct = n => n == null ? '—' : (n >= 0 ? '+' : '') + Number(n).toFixed(2) + '%';
+const fmtTime = iso => iso ? luxon.DateTime.fromISO(iso).toRelative() : '—';
+const colorOf = t => t === 'BUY' ? 'var(--green)' : t === 'SELL' ? 'var(--red)' : 'var(--muted)';
+
+function badgeHtml(type) {
+  const cls = type === 'BUY' ? 'badge-buy' : type === 'SELL' ? 'badge-sell' : 'badge-hold';
+  return `<span class="badge ${cls}">${type}</span>`;
+}
+
+function showToast(msg, type = 'info', dur = 5000) {
+  const toast = $('toast');
+  const el = document.createElement('div');
+  el.className = `toast-msg toast-${type}`;
+  el.innerHTML = msg;
+  toast.appendChild(el);
+  setTimeout(() => { el.style.animation = 'slideOut .3s ease forwards'; setTimeout(() => el.remove(), 350); }, dur);
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    $('ws-dot').classList.remove('inactive');
+    $('ws-status').textContent = 'Live';
+    setInterval(() => ws.readyState === 1 && ws.send('ping'), 20000);
+  };
+
+  ws.onmessage = ({data}) => {
+    try { handleWS(JSON.parse(data)); } catch(e) {}
+  };
+
+  ws.onclose = () => {
+    $('ws-dot').classList.add('inactive');
+    $('ws-status').textContent = 'Reconnecting…';
+    setTimeout(connectWS, 3000);
+  };
+}
+
+function handleWS(msg) {
+  if (msg.type === 'new_signal') {
+    const d = msg.data;
+    const emoji = d.signal_type === 'BUY' ? '🟢' : '🔴';
+    showToast(
+      `${emoji} <strong>${d.symbol}</strong> ${d.signal_type} @ ₹${fmt(d.entry_price)} — AI ${d.confidence}%`,
+      d.signal_type.toLowerCase(), 8000
+    );
+    loadDashboard();
+    loadSignals();
+  } else if (msg.type === 'scan_complete') {
+    loadDashboard();
+    loadBotRuns();
+  }
+}
+
+// ── Dashboard data ─────────────────────────────────────────────────────────
+async function loadDashboard() {
+  const r = await fetch(`${API}/dashboard/summary`).then(r => r.json()).catch(() => null);
+  if (!r) return;
+
+  $('stat-capital').textContent = '₹' + fmt(r.capital.total);
+  const pnl = r.trades.total_pnl_inr;
+  $('stat-pnl').textContent = '₹' + fmt(pnl);
+  $('stat-pnl').style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+  $('stat-winrate').textContent = r.trades.win_rate + '%';
+  $('stat-open').textContent = r.trades.open;
+  $('stat-signals').textContent = r.signals.length;
+  $('stat-lastrun').textContent = fmtTime(r.bot.last_run);
+  $('next-run').textContent = r.bot.next_run ? luxon.DateTime.fromISO(r.bot.next_run).toFormat('HH:mm') : '—';
+
+  renderSignalList(r.signals);
+}
+
+async function loadEquityCurve() {
+  const r = await fetch(`${API}/dashboard/equity-curve`).then(r => r.json()).catch(() => ({data:[]}));
+  renderEquityChart(r.data);
+}
+
+async function loadSignalHistory() {
+  const r = await fetch(`${API}/dashboard/signal-history`).then(r => r.json()).catch(() => ({data:[]}));
+  renderSignalChart(r.data);
+}
+
+// ── Signals ───────────────────────────────────────────────────────────────────
+async function loadSignals() {
+  const sym = $('sig-filter-symbol').value;
+  const typ = $('sig-filter-type').value;
+  let url = `${API}/signals/?limit=30`;
+  if (sym) url += `&symbol=${encodeURIComponent(sym)}`;
+  if (typ) url += `&signal_type=${typ}`;
+  const data = await fetch(url).then(r => r.json()).catch(() => []);
+  renderSignalList(data, true);
+}
+
+function renderSignalList(signals, fullView = false) {
+  if (!signals.length) { $('signals-list').innerHTML = '<p class="text-sm py-4 text-center" style="color:var(--muted)">No signals yet. Run a scan to get started.</p>'; return; }
+  $('signals-list').innerHTML = signals.map(s => `
+    <div class="signal-row">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex items-center gap-3 min-w-0">
+          ${badgeHtml(s.signal_type)}
+          <div>
+            <span class="font-semibold text-sm">${s.symbol}</span>
+            <span class="text-xs ml-1 px-1 rounded" style="background:var(--surface2);color:var(--muted)">${s.timeframe || ''}</span>
+          </div>
+          ${s.entry_price != null ? `<div class="text-sm font-mono" style="color:var(--text)">₹${fmt(s.entry_price || s.close_price)}</div>` : ''}
+        </div>
+        <div class="text-right shrink-0">
+          ${s.ai_confidence != null ? `
+          <div class="text-xs mb-1" style="color:var(--muted)">AI: <span style="color:${s.ai_confidence>=70?'var(--green)':'var(--yellow)'}">${s.ai_confidence}%</span></div>
+          <div class="confidence-bar w-24"><div class="confidence-fill" style="width:${s.ai_confidence}%;background:${s.ai_confidence>=70?'var(--green)':'var(--yellow)'}"></div></div>
+          ` : ''}
+          <div class="text-xs mt-1" style="color:var(--muted)">${fmtTime(s.created_at)}</div>
+        </div>
+      </div>
+      ${s.rsi != null ? `<div class="mt-1 text-xs" style="color:var(--muted)">RSI: <span style="color:var(--text)">${Number(s.rsi).toFixed(1)}</span></div>` : ''}
+      ${s.ai_reasoning ? `<p class="text-xs mt-1 truncate" style="color:var(--muted)">${s.ai_reasoning}</p>` : ''}
+    </div>
+  `).join('');
+}
+
+// ── Trades ─────────────────────────────────────────────────────────────────
+async function loadTrades() {
+  const [trades, perf] = await Promise.all([
+    fetch(`${API}/trades/?limit=30`).then(r => r.json()).catch(() => []),
+    fetch(`${API}/trades/performance`).then(r => r.json()).catch(() => null),
+  ]);
+
+  if (!trades.length) { $('trades-list').innerHTML = '<p class="text-sm py-4 text-center" style="color:var(--muted)">No trades recorded yet.</p>'; }
+  else {
+    $('trades-list').innerHTML = `
+      <table class="w-full text-sm">
+        <thead><tr style="color:var(--muted)">
+          <th class="text-left pb-2">Symbol</th><th class="text-left pb-2">Type</th>
+          <th class="text-right pb-2">Entry</th><th class="text-right pb-2">Exit</th>
+          <th class="text-right pb-2">P&L</th><th class="text-left pb-2">Status</th>
+          <th class="text-left pb-2">Time</th><th class="pb-2"></th>
+        </tr></thead>
+        <tbody>${trades.map(t => `
+          <tr style="border-top:1px solid var(--border)">
+            <td class="py-2 font-medium">${t.symbol}</td>
+            <td class="py-2">${badgeHtml(t.signal_type)}</td>
+            <td class="py-2 text-right font-mono">₹${fmt(t.entry_price)}</td>
+            <td class="py-2 text-right font-mono">${t.exit_price ? '₹'+fmt(t.exit_price) : '—'}</td>
+            <td class="py-2 text-right font-mono" style="color:${(t.pnl_inr||0)>=0?'var(--green)':'var(--red)'}">
+              ${t.pnl_inr != null ? '₹'+fmt(t.pnl_inr) : '—'}
+            </td>
+            <td class="py-2">
+              <span class="badge ${t.status==='OPEN'?'badge-hold':t.status==='CLOSED_WIN'?'badge-buy':'badge-sell'}">${t.status}</span>
+            </td>
+            <td class="py-2 text-xs" style="color:var(--muted)">${fmtTime(t.opened_at)}</td>
+            <td class="py-2">${t.status==='OPEN'?`<button class="btn btn-secondary text-xs py-1" onclick="closeTrade(${t.id})">Close</button>`:''}
+            </td>
+          </tr>
+        `).join('')}</tbody>
+      </table>`;
+  }
+
+  if (perf && perf.total_trades) {
+    $('trade-performance').innerHTML = `
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Closed Trades</p><p class="text-lg font-bold">${perf.total_trades}</p></div>
+        <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Win Rate</p><p class="text-lg font-bold" style="color:var(--green)">${perf.win_rate_pct}%</p></div>
+        <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Total P&L</p><p class="text-lg font-bold" style="color:${perf.total_pnl_inr>=0?'var(--green)':'var(--red)'}">₹${fmt(perf.total_pnl_inr)}</p></div>
+        <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Avg Win</p><p class="text-lg font-bold" style="color:var(--green)">₹${fmt(perf.avg_win_inr)}</p></div>
+      </div>`;
+  }
+}
+
+async function closeTrade(id) {
+  const exit = prompt('Exit price:');
+  if (!exit) return;
+  await fetch(`${API}/trades/${id}/close`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({exit_price: parseFloat(exit)})});
+  loadTrades(); loadDashboard();
+}
+
+async function saveTrade() {
+  const body = {
+    symbol: $('nt-symbol').value,
+    signal_type: $('nt-type').value,
+    entry_price: parseFloat($('nt-entry').value),
+    stop_loss: parseFloat($('nt-sl').value),
+    target: parseFloat($('nt-tp').value),
+    position_size_inr: parseFloat($('nt-pos').value),
+    notes: $('nt-notes').value || null,
+  };
+  await fetch(`${API}/trades/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  $('newTradeModal').classList.add('hidden');
+  loadTrades();
+}
+
+// ── Backtest ──────────────────────────────────────────────────────────────────
+async function runBacktest() {
+  const btn = $('bt-run-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Running…';
+  $('backtest-result').innerHTML = '<p class="text-sm" style="color:var(--muted)">Running backtest… this may take 30–60 seconds.</p>';
+
+  const r = await fetch(`${API}/backtest/run`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      symbol: $('bt-symbol').value,
+      timeframe: $('bt-timeframe').value,
+      candles: parseInt($('bt-candles').value),
+    })
+  }).then(r => r.json()).catch(e => ({error: e.message}));
+
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Backtest';
+
+  if (r.error) { $('backtest-result').innerHTML = `<p class="text-sm" style="color:var(--red)">Error: ${r.error}</p>`; return; }
+
+  const ret = r.total_return_pct;
+  $('backtest-result').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Total Trades</p><p class="text-2xl font-bold">${r.total_trades}</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Win Rate</p><p class="text-2xl font-bold" style="color:var(--green)">${r.win_rate}%</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Total Return</p><p class="text-2xl font-bold" style="color:${ret>=0?'var(--green)':'var(--red)'}">${ret>=0?'+':''}${ret}%</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Max Drawdown</p><p class="text-2xl font-bold" style="color:var(--red)">-${r.max_drawdown_pct}%</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Sharpe Ratio</p><p class="text-2xl font-bold">${r.sharpe_ratio}</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Avg Win</p><p class="text-2xl font-bold" style="color:var(--green)">+${r.avg_win_pct}%</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Avg Loss</p><p class="text-2xl font-bold" style="color:var(--red)">${r.avg_loss_pct}%</p></div>
+      <div class="stat-card"><p class="text-xs mb-1" style="color:var(--muted)">Period</p><p class="text-xs font-medium mt-1" style="color:var(--muted)">${r.start_date?.split('T')[0]} → ${r.end_date?.split('T')[0]}</p></div>
+    </div>`;
+  loadBacktestHistory();
+}
+
+async function loadBacktestHistory() {
+  const rows = await fetch(`${API}/backtest/?limit=10`).then(r => r.json()).catch(() => []);
+  if (!rows.length) return;
+  $('backtest-history').innerHTML = `
+    <h4 class="text-sm font-semibold mb-3" style="color:var(--muted)">Previous Runs</h4>
+    <table class="w-full text-sm">
+      <thead><tr style="color:var(--muted)"><th class="text-left pb-2">Symbol</th><th class="text-left pb-2">TF</th><th class="text-right pb-2">Trades</th><th class="text-right pb-2">Win%</th><th class="text-right pb-2">Return</th><th class="text-right pb-2">DD</th><th class="text-left pb-2">Date</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr style="border-top:1px solid var(--border)">
+          <td class="py-2">${r.symbol}</td><td>${r.timeframe}</td>
+          <td class="text-right">${r.total_trades}</td>
+          <td class="text-right" style="color:var(--green)">${r.win_rate}%</td>
+          <td class="text-right" style="color:${(r.total_return_pct||0)>=0?'var(--green)':'var(--red)'}">${(r.total_return_pct||0)>=0?'+':''}${r.total_return_pct}%</td>
+          <td class="text-right" style="color:var(--red)">-${r.max_drawdown_pct}%</td>
+          <td class="text-xs" style="color:var(--muted)">${fmtTime(r.created_at)}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table>`;
+}
+
+// ── Bot Logs ───────────────────────────────────────────────────────────────
+async function loadBotRuns() {
+  const runs = await fetch(`${API}/dashboard/bot-runs`).then(r => r.json()).catch(() => []);
+  if (!runs.length) { $('bot-runs-list').innerHTML = '<p class="text-sm" style="color:var(--muted)">No runs yet.</p>'; return; }
+  $('bot-runs-list').innerHTML = `
+    <table class="w-full text-sm">
+      <thead><tr style="color:var(--muted)"><th class="text-left pb-2">Time</th><th class="text-right pb-2">Signals</th><th class="text-right pb-2">Alerts</th><th class="text-right pb-2">Duration</th><th class="text-left pb-2">Status</th><th class="text-left pb-2">Error</th></tr></thead>
+      <tbody>${runs.map(r => `
+        <tr style="border-top:1px solid var(--border)">
+          <td class="py-2 text-xs">${luxon.DateTime.fromISO(r.run_at).toFormat('dd MMM HH:mm')}</td>
+          <td class="text-right">${r.signals_generated}</td>
+          <td class="text-right">${r.alerts_sent}</td>
+          <td class="text-right">${r.duration_ms}ms</td>
+          <td><span class="badge ${r.status==='SUCCESS'?'badge-win':'badge-sell'}">${r.status}</span></td>
+          <td class="text-xs" style="color:var(--red)">${r.error||''}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table>`;
+}
+
+// ── Charts ─────────────────────────────────────────────────────────────────
+function renderEquityChart(data) {
+  const ctx = $('equityChart').getContext('2d');
+  if (equityChart) equityChart.destroy();
+  equityChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.map(d => d.date),
+      datasets: [{
+        label: 'Cumulative P&L (₹)',
+        data: data.map(d => d.cumulative_inr),
+        borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,.08)',
+        fill: true, tension: 0.4, pointRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxTicksLimit: 6 } },
+        y: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+      },
+    },
+  });
+}
+
+function renderSignalChart(data) {
+  const ctx = $('signalChart').getContext('2d');
+  if (signalChart) signalChart.destroy();
+  signalChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.date),
+      datasets: [
+        { label: 'BUY', data: data.map(d => d.BUY||0), backgroundColor: 'rgba(63,185,80,.7)', borderRadius: 4 },
+        { label: 'SELL', data: data.map(d => d.SELL||0), backgroundColor: 'rgba(248,81,73,.7)', borderRadius: 4 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b949e', boxWidth: 10 } } },
+      scales: {
+        x: { stacked: true, grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxTicksLimit: 8 } },
+        y: { stacked: true, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+      },
+    },
+  });
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function switchTab(name, el) {
+  document.querySelectorAll('[id^="tab-"]').forEach(t => t.classList.add('hidden'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  $('tab-' + name).classList.remove('hidden');
+  el.classList.add('active');
+  if (name === 'trades') loadTrades();
+  if (name === 'backtest') loadBacktestHistory();
+  if (name === 'botlogs') loadBotRuns();
+  if (name === 'signals') loadSignals();
+}
+
+// ── Scan trigger ───────────────────────────────────────────────────────────
+async function triggerScan() {
+  showToast('🔍 Scan triggered…', 'info', 3000);
+  await fetch(`${API}/signals/scan`, {method:'POST'});
+  setTimeout(() => { loadDashboard(); loadSignals(); }, 2000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+(async () => {
+  connectWS();
+  await loadDashboard();
+  await loadEquityCurve();
+  await loadSignalHistory();
+  loadSignals();
+  // Refresh dashboard every 60s
+  setInterval(loadDashboard, 60000);
+})();
+</script>
+</body>
+</html>

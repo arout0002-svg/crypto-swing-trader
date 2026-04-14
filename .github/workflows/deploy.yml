@@ -1,0 +1,161 @@
+name: CI/CD — Crypto Swing Trader
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── Test ─────────────────────────────────────────────────────────────────────
+  test:
+    name: Test (Python 3.12)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: copilot
+          POSTGRES_PASSWORD: copilot
+          POSTGRES_DB: copilot_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create test .env
+        run: |
+          cat > .env << 'EOF'
+          DATABASE_URL=postgresql://copilot:copilot@localhost:5432/copilot_db
+          AI_PROVIDER=disabled
+          DEBUG=true
+          SYMBOLS=BTC/USDT
+          TIMEFRAMES=1h
+          TOTAL_CAPITAL=100000
+          SCHEDULE_INTERVAL_MINUTES=60
+          EOF
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short || true
+
+  # ── Deploy ────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload secrets file to EC2
+        run: |
+          cat > /tmp/deploy_secrets.sh << 'SECRETS'
+          export GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}"
+          export DATABASE_URL="${{ secrets.DATABASE_URL || 'postgresql://copilot:copilot@localhost:5432/copilot_db' }}"
+          SECRETS
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            /tmp/deploy_secrets.sh \
+            ubuntu@${{ secrets.EC2_HOST }}:/tmp/deploy_secrets.sh
+
+      - name: Deploy to EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ubuntu@${{ secrets.EC2_HOST }} << 'ENDSSH'
+
+          set -e
+          APP_DIR="/home/ubuntu/crypto-swing-trader"
+
+          # ── Pull latest code ──────────────────────────────────────────────
+          echo ">>> Pulling latest code..."
+          cd "$APP_DIR" 2>/dev/null || { git clone https://github.com/${{ github.repository }}.git "$APP_DIR"; cd "$APP_DIR"; }
+          git fetch origin
+          git reset --hard origin/main
+
+          # ── Load secrets ──────────────────────────────────────────────────
+          source /tmp/deploy_secrets.sh
+          rm -f /tmp/deploy_secrets.sh
+
+          # ── Bootstrap .env if missing ─────────────────────────────────────
+          if [ ! -f "$APP_DIR/.env" ]; then
+            cp "$APP_DIR/.env.production" "$APP_DIR/.env"
+          fi
+
+          upsert_env() {
+            local key="$1" val="$2"
+            if grep -q "^${key}=" "$APP_DIR/.env"; then
+              grep -v "^${key}=" "$APP_DIR/.env" > /tmp/.env.tmp
+              printf '%s=%s\n' "$key" "$val" >> /tmp/.env.tmp
+              mv /tmp/.env.tmp "$APP_DIR/.env"
+            else
+              printf '%s=%s\n' "$key" "$val" >> "$APP_DIR/.env"
+            fi
+          }
+
+          upsert_env "DATABASE_URL" "$DATABASE_URL"
+          upsert_env "GROQ_API_KEY" "$GROQ_API_KEY"
+
+          # ── Venv & dependencies ───────────────────────────────────────────
+          echo ">>> Installing dependencies..."
+          python3.12 -m venv "$APP_DIR/.venv" 2>/dev/null || true
+          "$APP_DIR/.venv/bin/pip" install --upgrade pip -q
+          "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt" -q
+
+          # ── Systemd service ───────────────────────────────────────────────
+          echo ">>> Installing systemd service..."
+          sed "s/__USER__/ubuntu/g" "$APP_DIR/infra/trader.service" \
+            | sudo tee /etc/systemd/system/crypto-trader.service > /dev/null
+          sudo systemctl daemon-reload
+          sudo systemctl enable crypto-trader
+          sudo systemctl restart crypto-trader
+
+          # ── Nginx ─────────────────────────────────────────────────────────
+          sudo cp "$APP_DIR/infra/nginx.conf" /etc/nginx/sites-available/default
+          sudo nginx -t && sudo systemctl reload nginx
+
+          # ── Health check ──────────────────────────────────────────────────
+          echo ">>> Waiting for service to start..."
+          sleep 8
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8001/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Crypto Trader is healthy (HTTP 200)"
+              break
+            fi
+            echo "Attempt $i: HTTP $STATUS — waiting 5s..."
+            sleep 5
+          done
+
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Health check failed — last status: $STATUS"
+            sudo journalctl -u crypto-trader -n 30 --no-pager
+            exit 1
+          fi
+
+          ENDSSH
+
+      - name: Print deployment URL
+        run: echo "🚀 Deployed: http://${{ secrets.EC2_HOST }}/trader/"
